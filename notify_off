@@ -1,0 +1,56 @@
+#!/bin/sh
+
+#
+# This script is part of lightson. It is invoked upon triggering a GitHub Workflow.
+# It receives chat IDs as a command line arguments, waits for 90 seconds and then
+# sends a power cut message to all the chats.
+#
+# .____     .__    ____  .__      __          ________    _______
+# |    |    |__|  / ___\ |  |__ _/  |_  ______\_____  \   \      \
+# |    |    |  | / /_/  >|  |  \\   __\/  ___/ /   |   \  /   |   \
+# |    |___ |  | \___  / |   Y  \|  |  \___ \ /    |    \/    |    \
+# |_______ \|__|/_____/  |___|  /|__| /____  >\_______  /\____|__  /
+#         \/                  \/           \/         \/         \/
+#
+
+############################################################
+# Constants
+############################################################
+
+TELEGRAM_API_ENDPOINT="https://api.telegram.org"
+TELEGRAM_BOT_API_BASE_URL="${TELEGRAM_API_ENDPOINT}/bot${TELEGRAM_TOKEN}"
+
+POWER_CUT_MESSAGE="🔴 Світла нема!"
+
+############################################################
+# UTILITIES
+############################################################
+
+url_quote() {
+   jq -rn --arg x "$1" '$x|@uri'
+}
+
+############################################################
+# TELEGRAM API UTILS
+############################################################
+
+send_message() {
+    chat_id=$1
+    text=$(url_quote "$2")
+    curl "$TELEGRAM_BOT_API_BASE_URL/sendMessage?chat_id=${chat_id}&text=${text}"
+}
+
+############################################################
+# ENTRY POINT
+############################################################
+
+notify_all() {
+    sleep 90s
+    # shellcheck disable=SC2068
+    for chat_id in $@; do
+        send_message "$chat_id" "$POWER_CUT_MESSAGE"
+    done
+}
+
+# shellcheck disable=SC2068
+notify_all $@

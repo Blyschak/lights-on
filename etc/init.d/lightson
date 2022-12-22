@@ -1,0 +1,21 @@
+#!/bin/sh /etc/rc.common
+
+# shellcheck disable=SC2034
+START=10
+STOP=15
+
+boot() {
+    start
+}
+
+start() {
+    echo Starting lightson
+    ( /usr/bin/lightson ) &
+    pid=$!
+    echo $pid > /var/run/lightson.pid
+}
+
+stop() {
+    echo Stopping lightson
+    kill -9 "$(cat /var/run/lightson.pid)"
+}

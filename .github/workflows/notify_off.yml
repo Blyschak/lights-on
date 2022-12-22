@@ -1,0 +1,24 @@
+name: Lights off notification action
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      chatIds:
+        description: "Chat IDs"
+        required: true
+
+jobs:
+  notify-off:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.0.0
+
+      - name: Notify
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: ./notify_off ${{ github.event.inputs.chatIds }}

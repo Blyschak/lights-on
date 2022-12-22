@@ -1,0 +1,237 @@
+#!/bin/sh
+
+
+#
+# This script is part of lightson. It is ran on a router devices.
+# It sends power on message to all subscribers upon start and then
+# start an infinite loop that fetches updates from telegram to processes
+# commands from clients and restarts GitHub workflow (see notify_off script)
+# once in 60 seconds. 
+#
+# .____     .__    ____  .__      __          ________    _______
+# |    |    |__|  / ___\ |  |__ _/  |_  ______\_____  \   \      \
+# |    |    |  | / /_/  >|  |  \\   __\/  ___/ /   |   \  /   |   \
+# |    |___ |  | \___  / |   Y  \|  |  \___ \ /    |    \/    |    \
+# |_______ \|__|/_____/  |___|  /|__| /____  >\_______  /\____|__  /
+#         \/                  \/           \/         \/         \/
+#
+
+
+############################################################
+# Constants
+############################################################
+
+# NOTE: Define the following constants
+
+TELEGRAM_TOKEN=""
+GH_USER=""
+GH_TOKEN=""
+
+GH_BRANCH="main"
+GH_REPO="lights-on"
+GH_WORKFLOW="notify_off.yml"
+
+APP_NAME="lightson"
+
+CHATS_DB_FILE="$HOME/chats"
+
+TELEGRAM_API_ENDPOINT="https://api.telegram.org"
+TELEGRAM_BOT_API_BASE_URL="${TELEGRAM_API_ENDPOINT}/bot${TELEGRAM_TOKEN}"
+
+COMMANDS_FILE="/tmp/commands"
+
+POWER_CHECK_PASS_MESSAGE="🟩 Світло є!"
+POWER_ON_MESSAGE="🟢 Світло з'явилось!"
+
+
+############################################################
+# GLOBALS
+############################################################
+
+updates_offset=0
+last_workflow_run=0
+
+
+############################################################
+# UTILITIES
+############################################################
+
+log() {
+    level="$1"
+    shift
+    logger -t $APP_NAME -p "$level" "$@"
+}
+
+log_info() {
+    log info "$@"
+}
+
+log_err() {
+    log err "$@"
+}
+
+url_quote() {
+   jq -rn --arg x "$1" '$x|@uri'
+}
+
+############################################################
+# TELEGRAM API UTILS
+############################################################
+
+send_message() {
+    chat_id=$1
+    text=$(url_quote "$2")
+    curl "$TELEGRAM_BOT_API_BASE_URL/sendMessage?chat_id=${chat_id}&text=${text}"
+}
+
+get_updates() {
+    response_file="/tmp/updates.json"
+
+    allowed_updates=$(url_quote '["message"]')
+
+    curl "$TELEGRAM_BOT_API_BASE_URL/getUpdates?offset=${updates_offset}&allowed_updates=${allowed_updates}" \
+         -o $response_file
+
+    last_update=$(jq '.result[-1].update_id' $response_file)
+
+    if [ "$last_update" != "null" ]; then
+        updates_offset=$(( last_update + 1 ))
+        log_info "Update offset ${updates_offset}"
+    fi
+
+    # save commands file in a format:
+    # <chat-id> <message>
+    # <chat-id> <message>
+    jq -r '.result | .[] | .message | (.chat.id|tostring) + " " + .text' $response_file > $COMMANDS_FILE
+}
+
+############################################################
+# COMMANDS
+############################################################
+
+do_start_command() {
+    chat_id=$1
+    log_info "Start command for $chat_id"
+    grep -qxF "$chat_id" "$CHATS_DB_FILE" || echo "$chat_id" >> "$CHATS_DB_FILE"
+    send_message "$chat_id" "Hi!"
+}
+
+do_stop_command() {
+    chat_id=$1
+    log_info "Stop command for $chat_id"
+    grep -v "$chat_id" "$CHATS_DB_FILE" > /tmp/chats
+    mv /tmp/chats "$CHATS_DB_FILE"
+    send_message "$chat_id" "Bye!"
+}
+
+do_check_command() {
+    chat_id=$1
+    log_info "Check command for $chat_id"
+    send_message "$chat_id" "$POWER_CHECK_PASS_MESSAGE"
+}
+
+do_help_command() {
+    chat_id=$1
+    send_message "$chat_id" "Команди:
+/start - Підписатись на сповіщення
+/stop  - Відписатись від сповіщень
+/check - Перевірити електроживлення"
+}
+
+notify_all_power_on() {
+    while read -r chat_id; do
+        send_message "$chat_id" "$POWER_ON_MESSAGE"
+    done < "$CHATS_DB_FILE"
+}
+
+start_gh_notify_power_cut_workflow() {
+    chat_ids=$(tr '\n' ' ' < "$CHATS_DB_FILE")
+    post_data="{\"ref\": \"${GH_BRANCH}\", \"inputs\": {\"chatIds\": \"$chat_ids\"}}"
+    curl -X POST\
+         -u "${GH_USER}:${GH_TOKEN}" \
+         -d "$post_data" \
+         "https://api.github.com/repos/${GH_USER}/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches"
+}
+
+process_command() {
+    chat_id="$1"
+    message="$2"
+
+    case $message in
+        "/start")
+            do_start_command "$chat_id"
+            do_help_command "$chat_id"
+            ;;
+        "/stop")
+            do_stop_command "$chat_id"
+            ;;
+        "/check")
+            do_check_command "$chat_id"
+            ;;
+        "/help")
+            do_help_command "$chat_id"
+            ;;
+        *)
+            do_help_command "$chat_id"
+            ;;
+    esac
+}
+
+process_commands() {
+    while read -r line; do
+        # shellcheck disable=SC2086
+        process_command $line
+    done < "$COMMANDS_FILE"
+}
+
+############################################################
+# MAIN LOOP FUNCTION
+############################################################
+
+main_loop() {
+    touch "$CHATS_DB_FILE"
+
+    log_info "Starting main loop"
+
+    while :; do
+        now="$(date +%s)"
+        time_diff=$(( now - last_workflow_run ));
+        # If 60 sec passed since we started workflow
+        if [ $time_diff -ge 60 ]; then
+            log_info "Starting workflow"
+            start_gh_notify_power_cut_workflow
+            last_workflow_run="$(date '+%s')"
+            :;
+        fi
+
+        get_updates
+        process_commands
+        sleep 1
+    done
+}
+
+############################################################
+# ENTRY POINT
+############################################################
+
+main() {
+    notify_all_power_on
+    main_loop
+}
+
+if [ -z "$TELEGRAM_TOKEN" ]; then
+    log_err "Telegram token undefined"
+    exit 1
+fi
+
+if [ -z "$GH_USER" ]; then
+    log_err "GitHub user undefined"
+    exit 1
+fi
+
+if [ -z "$GH_TOKEN" ]; then
+    log_err "GitHub token undefined"
+    exit 1
+fi
+
+main
