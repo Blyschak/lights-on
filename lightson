@@ -6,7 +6,7 @@
 # It sends power on message to all subscribers upon start and then
 # start an infinite loop that fetches updates from telegram to processes
 # commands from clients and restarts GitHub workflow (see notify_off script)
-# once in 60 seconds. 
+# once in 60 seconds.
 #
 # .____     .__    ____  .__      __          ________    _______
 # |    |    |__|  / ___\ |  |__ _/  |_  ______\_____  \   \      \
@@ -74,6 +74,10 @@ url_quote() {
    jq -rn --arg x "$1" '$x|@uri'
 }
 
+invoke_curl() {
+    curl --retry 10 --retry-delay 5 "$@"
+}
+
 ############################################################
 # TELEGRAM API UTILS
 ############################################################
@@ -81,7 +85,7 @@ url_quote() {
 send_message() {
     chat_id=$1
     text=$(url_quote "$2")
-    curl "$TELEGRAM_BOT_API_BASE_URL/sendMessage?chat_id=${chat_id}&text=${text}"
+    invoke_curl "$TELEGRAM_BOT_API_BASE_URL/sendMessage?chat_id=${chat_id}&text=${text}"
 }
 
 get_updates() {
@@ -89,7 +93,7 @@ get_updates() {
 
     allowed_updates=$(url_quote '["message"]')
 
-    curl "$TELEGRAM_BOT_API_BASE_URL/getUpdates?offset=${updates_offset}&allowed_updates=${allowed_updates}" \
+    invoke_curl "$TELEGRAM_BOT_API_BASE_URL/getUpdates?offset=${updates_offset}&allowed_updates=${allowed_updates}" \
          -o $response_file
 
     last_update=$(jq '.result[-1].update_id' $response_file)
@@ -147,7 +151,7 @@ notify_all_power_on() {
 start_gh_notify_power_cut_workflow() {
     chat_ids=$(tr '\n' ' ' < "$CHATS_DB_FILE")
     post_data="{\"ref\": \"${GH_BRANCH}\", \"inputs\": {\"chatIds\": \"$chat_ids\"}}"
-    curl -X POST\
+    invoke_curl -X POST\
          -u "${GH_USER}:${GH_TOKEN}" \
          -d "$post_data" \
          "https://api.github.com/repos/${GH_USER}/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches"
